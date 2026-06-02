@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.conversation import Conversation, Message
 from app.models.user import User
-from app.services.answers.pipeline import answer_question
+from app.services.gemini_files.engine import answer_question
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 

@@ -11,12 +11,17 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://contract:contract@db:5432/contract"
     redis_url: str = "redis://redis:6379/0"
 
-    # Gemini
+    # Gemini (legacy RAG engine — unused on the NotebookLM branch, kept for fallback)
     gemini_api_key: str = ""
     gemini_model_fast: str = "gemini-flash-latest"
     gemini_model_accurate: str = "gemini-pro-latest"
     gemini_embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 768
+
+    # NotebookLM engine — HTTP REST API exposed by the NotebookLM MCP/automation server
+    # (e.g. roomi-fields/notebooklm-mcp). Runs a headed Chrome logged into a Google account.
+    notebooklm_api_url: str = "http://notebooklm:3000"
+    notebooklm_request_timeout: float = 600.0   # answers can take minutes
 
     # Full-text (BM25) backend: 'pg_search' (ParadeDB, prod/Docker) or 'tsvector'
     # (Postgres built-in, for local runs on vanilla Postgres without ParadeDB).

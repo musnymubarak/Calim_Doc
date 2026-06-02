@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "PowerShell($env:PYTHONPATH = \"backend\"; python -m compileall -q backend/app; if \\($?\\) { \"compile OK\" }; Get-ChildItem -Path backend -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force; \"cleaned\")",
+      "PowerShell(foreach \\($c in 'git','node','npm'\\) { $p = \\(Get-Command $c -ErrorAction SilentlyContinue\\).Source; if \\($p\\) { \"$c -> $p\" } else { \"$c -> NOT FOUND\" } }; \"node: \" + \\(& node --version 2>$null\\); \"npm: \" + \\(& npm --version 2>$null\\))",
+      "Read(//c/Users/musny/Desktop/Hashnate/notebooklm-mcp/**)",
+      "PowerShell(npm install --prefix \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\notebooklm-mcp\" 2>&1)",
+      "PowerShell(Push-Location \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\notebooklm-mcp\"; npm run build 2>&1 | Out-String; Pop-Location; \"dist exists now: \" + \\(Test-Path \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\notebooklm-mcp\\\\dist\\\\http-wrapper.js\"\\))",
+      "PowerShell(python \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\Calim_Document_Analyzis\\\\backend\\\\scripts\\\\nlm_smoketest.py\" 2>&1)",
+      "PowerShell(Copy-Item \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\Calim_Document_Analyzis\\\\data\\\\sample_contract.txt\" \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\notebooklm-mcp\\\\sample_contract.txt\" -Force; \"copied: \" + \\(Test-Path \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\notebooklm-mcp\\\\sample_contract.txt\"\\); python \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\Calim_Document_Analyzis\\\\backend\\\\scripts\\\\nlm_smoketest.py\" \"C:\\\\Users\\\\musny\\\\Desktop\\\\Hashnate\\\\notebooklm-mcp\\\\sample_contract.txt\" 2>&1 | Out-String)",
+      "PowerShell($env:PYTHONPATH = \"backend\"; python -m compileall -q backend/app; if \\($?\\) { \"compile OK\" }; python backend/tests/test_answers.py | Select-Object -Last 1; Get-ChildItem -Path backend -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force; \"cleaned\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\musny\\Desktop\\Hashnate\\notebooklm-mcp\\src\\tools",
+      "C:\\Users\\musny\\Desktop\\Hashnate\\notebooklm-mcp\\src\\session"
+    ]
+  }
+}

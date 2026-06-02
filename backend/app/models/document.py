@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 from pgvector.sqlalchemy import HALFVEC
 from sqlalchemy import Boolean, Date, ForeignKey, Integer, Real, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config import settings
@@ -38,6 +38,16 @@ class Document(Base):
     strategy: Mapped[str] = mapped_column(String(16), default="rag")  # rag|cached_whole
     gemini_cache_name: Mapped[str | None] = mapped_column(String(256))
     cache_expires_at: Mapped[datetime | None]
+
+    # NotebookLM engine (spike, abandoned): the doc was uploaded as a source into a notebook.
+    notebooklm_notebook_id: Mapped[str | None] = mapped_column(String(128))
+    notebooklm_source_id: Mapped[str | None] = mapped_column(String(128))
+
+    # Gemini File API engine (active): the doc is uploaded to the Files API. Files expire ~48h,
+    # so we store the resource name + expiry and re-upload on demand from the local file.
+    gemini_file_name: Mapped[str | None] = mapped_column(String(256))   # "files/abc123"
+    gemini_file_uri: Mapped[str | None] = mapped_column(Text)
+    gemini_file_expires_at: Mapped[datetime | None]
 
     created_at: Mapped[datetime] = created_at_col()
 

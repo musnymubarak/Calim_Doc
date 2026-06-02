@@ -184,6 +184,70 @@ wiring (+ Batch-API embed path, file-serving endpoint + PDF.js overlay, eval har
 
 ---
 
+## Branch: `notebooklm` — engine swap (NotebookLM instead of the RAG pipeline)
+
+**Why:** evaluate using NotebookLM (grounded chat + citations) as the engine instead of the
+custom Docling→chunk→pgvector→Gemini pipeline. `main` keeps the full RAG engine intact.
+
+**What changed (engine swapped, shell kept):**
+- `services/notebooklm/client.py` — HTTP client for the NotebookLM automation server's REST API
+  (create_notebook / add_source / ask). Endpoint paths centralized + flagged to reconcile with
+  the chosen server (roomi-fields/notebooklm-mcp etc.).
+- `services/notebooklm/engine.py` — `ingest_to_notebooklm` (upload doc as a source into a
+  per-document notebook) and `answer_question` (ask the notebook, pass through citations).
+  Returns the same `AnswerResult` shape the chat endpoint expects.
+- `models/document.py` — added `notebooklm_notebook_id`, `notebooklm_source_id`.
+- `workers/main.py` → calls `ingest_to_notebooklm`; `api/chat.py` → calls the NotebookLM engine.
+- `config.py` / `.env.example` — `NOTEBOOKLM_API_URL`. `docker-compose.yml` — `notebooklm`
+  service placeholder (headed Chrome + REST API; needs a persisted Google-login profile + Xvfb).
+
+**Dropped vs main (deliberately — NotebookLM is a black box):** no chunking/embeddings/pgvector,
+no retrieval, no escalation ladder, no local citation-verification gate. The
+ingestion/retrieval/gemini modules remain in-tree but unused on this branch.
+
+**Verification:** `compileall` clean; existing pure-logic tests still pass (unaffected).
+
+> Untested at runtime: the entire NotebookLM HTTP path. The server's actual REST routes/payloads
+> MUST be reconciled with whatever server is deployed — `client.py` endpoint map is the one place
+> to adjust. Run the spike first to confirm citation quality + that contracts fit as sources.
+
+**Assumption:** single Google account (~10 concurrent sessions). Multi-account rotation is a
+server-layer concern if concurrency grows.
+
+### NotebookLM spike outcome — ABANDONED
+Stood up roomi-fields/notebooklm-mcp locally (clone/install/build/auth). Live testing hit
+**three** browser-automation failures in one sitting: (1) create-notebook button selector stale,
+(2) `/ask` blocked by a modal overlay, (3) session **bounced to Google login mid-operation**
+(bot detection / auth instability). Patched (1) and (2) in the server source and confirmed
+create + ask CAN work — but (3) is intermittent and not reliably patchable. Verdict: too fragile
+for a multi-user production app. **Pivoted to the Gemini File API.**
+
+---
+
+## Branch: `notebooklm` (now carries the Gemini File API engine)
+
+**Active engine = Gemini File API** (official SDK, no browser, multi-user-safe). Same engine-swap
+pattern; RAG modules (main) and NotebookLM modules (spike) remain in-tree but unused.
+- `services/gemini_files/client.py` — Files API `upload` (waits for ACTIVE) + grounded
+  `generate_content` with structured output (`response_schema`), sync SDK off the event loop.
+- `services/gemini_files/engine.py` — `ingest_to_gemini` (upload, store name+expiry),
+  `answer_question` (re-upload if the ~48h file expired → generate → map citations). File-API
+  citation schema = per-claim `{cited_quote, page, section, exceptions}` (no chunk_id).
+- `models/document.py` — `gemini_file_name` / `gemini_file_uri` / `gemini_file_expires_at`.
+- `workers/main.py` + `api/chat.py` → repointed to the Gemini Files engine.
+- `tests/...` pure-logic tests still pass; `compileall` clean.
+- `scripts/gemini_files_smoketest.py` — standalone validation (just needs `google-genai` + key).
+
+**Trade-offs (deliberate):** Gemini reads the whole document per question (cost = the
+per-token model we analyzed; mitigate later with context caching). No local citation-verification
+gate yet (we don't keep extracted text) — we trust Gemini's structured quotes+pages for v1; can
+re-add verification by extracting text. Files expire ~48h → re-upload on demand from local FS.
+
+> Untested at runtime here (no SDK/key): the upload + generate calls. Official SDK so low risk;
+> run `scripts/gemini_files_smoketest.py` with a key to confirm.
+
+---
+
 ## Status: what's implemented vs stubbed
 
 **Runnable now:** `docker compose up` boots all 5 services; migrations create the schema;

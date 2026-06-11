@@ -60,17 +60,19 @@ class GeminiClient:
         if self._client is None:
             self._client = genai.Client(api_key=settings.gemini_api_key)
 
+        from app.services.gemini.retry import with_retry
+
         vectors: list[list[float]] = []
         for i in range(0, len(texts), _EMBED_BATCH):
             chunk = texts[i:i + _EMBED_BATCH]
-            resp = self._client.models.embed_content(
+            resp = with_retry(lambda: self._client.models.embed_content(
                 model=settings.gemini_embedding_model,
                 contents=chunk,
                 config=types.EmbedContentConfig(
                     task_type=task_type,
                     output_dimensionality=settings.embedding_dim,
                 ),
-            )
+            ), what="embed_content")
             vectors.extend(_normalize(list(e.values)) for e in resp.embeddings)
         return vectors
 
@@ -95,6 +97,31 @@ class GeminiClient:
         self, model: str, system_prompt: str, context: str, question: str,
         thinking_budget: int, max_output_tokens: int,
     ) -> GenResult:
+        from app.services.gemini.schemas import ANSWER_SCHEMA
+
+        prompt = f"CONTEXT:\n{context}\n\nQUESTION: {question}"
+        fallback = {"answer": "", "claims": [], "answerable": False, "confidence": "low"}
+        return self._generate_json_sync(
+            model, system_prompt, prompt, ANSWER_SCHEMA, thinking_budget,
+            max_output_tokens, fallback,
+        )
+
+    async def generate_json(
+        self, *, model: str, system_prompt: str, prompt: str, schema: dict,
+        max_output_tokens: int, thinking_budget: int = 0,
+    ) -> GenResult:
+        """Structured generation against an arbitrary schema + plain prompt (no document
+        attached). Used by the RAG risk-report path, which feeds retrieved context as text."""
+        return await asyncio.to_thread(
+            self._generate_json_sync, model, system_prompt, prompt, schema,
+            thinking_budget, max_output_tokens, {},
+        )
+
+    def _generate_json_sync(
+        self, model: str, system_prompt: str, prompt: str, schema: dict,
+        thinking_budget: int, max_output_tokens: int, fallback: dict,
+    ) -> GenResult:
+        import copy
         import json
 
         from google import genai
@@ -103,24 +130,28 @@ class GeminiClient:
         if self._client is None:
             self._client = genai.Client(api_key=settings.gemini_api_key)
 
-        from app.services.gemini.schemas import ANSWER_SCHEMA
-
-        prompt = f"CONTEXT:\n{context}\n\nQUESTION: {question}"
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
             response_mime_type="application/json",
-            response_schema=ANSWER_SCHEMA,
+            # Deep-copy: the SDK mutates the schema dict in place, corrupting module constants.
+            response_schema=copy.deepcopy(schema),
             max_output_tokens=max_output_tokens,
             # thinking bills as output — keep it off on the cheap path, raise on escalation.
             thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
         )
-        resp = self._client.models.generate_content(model=model, contents=prompt, config=config)
+        from app.services.gemini.retry import call_with_model_fallback, fallback_chain
+        resp = call_with_model_fallback(
+            lambda m: self._client.models.generate_content(model=m, contents=prompt, config=config),
+            fallback_chain(model),
+            what="generate_content",
+        )
 
         try:
             data = json.loads(resp.text)
         except (json.JSONDecodeError, TypeError):
-            data = {"answer": resp.text or "", "claims": [], "answerable": False,
-                    "confidence": "low"}
+            data = dict(fallback) if fallback else {}
+            if fallback:
+                data["answer"] = resp.text or ""
 
         usage = getattr(resp, "usage_metadata", None)
         token_usage = {

@@ -22,8 +22,18 @@ async def ingest_document(ctx: dict, document_id: str) -> None:
     """
     async with SessionLocal() as db:
         await ingest_to_gemini(db, uuid.UUID(document_id))
+    
+    # Enqueue risk report generation
+    await ctx['redis'].enqueue_job('generate_risk_report', document_id)
+
+
+async def generate_risk_report(ctx: dict, document_id: str) -> None:
+    """Job enqueued after successful ingest_to_gemini."""
+    from app.services.risk.report_generator import generate_report
+    async with SessionLocal() as db:
+        await generate_report(db, uuid.UUID(document_id))
 
 
 class WorkerSettings:
-    functions = [ingest_document]
+    functions = [ingest_document, generate_risk_report]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

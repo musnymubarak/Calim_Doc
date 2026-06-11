@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime
 
 from pgvector.sqlalchemy import HALFVEC
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, Real, String, Text
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -52,6 +52,7 @@ class Document(Base):
     created_at: Mapped[datetime] = created_at_col()
 
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="document")
+    risk_report: Mapped["RiskReport"] = relationship(back_populates="document", uselist=False)
 
 
 class Chunk(Base):
@@ -116,7 +117,7 @@ class CrossRefEdge(Base):
     target_ref: Mapped[str] = mapped_column(Text)  # "Section 12.3", "Schedule B"
     target_chunk_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chunks.id"))
     kind: Mapped[str] = mapped_column(String(32))  # explicit|relative|incorporation
-    confidence: Mapped[float] = mapped_column(Real, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
 
 

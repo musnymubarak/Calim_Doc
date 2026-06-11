@@ -56,17 +56,37 @@ def _format_context(chunks: list[RetrievedChunk]) -> str:
     )
 
 
-def _build_citations(verified_claims: list[dict]) -> list[dict]:
-    return [
-        {
-            "chunk_id": c.get("chunk_id"),
-            "page": c.get("page"),
+def _build_citations(
+    verified_claims: list[dict], chunk_pages: dict[str, int | None] | None = None
+) -> list[dict]:
+    """Normalize verified claims into the shape the UI renders (claim_text / quote / page).
+
+    The model fills `claim_text` + `cited_span` but routinely omits the optional `page`, so we
+    resolve the page from the chunk the span was verified against (its real page_start) rather
+    than trusting the model. Skeletal claims (no text AND no quote) are dropped."""
+    chunk_pages = chunk_pages or {}
+    out: list[dict] = []
+    for c in verified_claims:
+        claim_text = (c.get("claim_text") or "").strip()
+        quote = (c.get("cited_span") or "").strip()
+        if not claim_text and not quote:
+            continue
+        # Real page from the verified chunk wins over the model's (usually-null) page.
+        page = chunk_pages.get(str(c.get("chunk_id")))
+        if page is None:
+            page = c.get("page")
+        out.append({
+            "claim_text": claim_text or None,
+            "quote": quote or None,
+            "cited_span": quote or None,   # kept for back-compat / viewer navigation
+            "page": page,
             "section": c.get("section"),
-            "cited_span": c.get("cited_span"),
+            "polarity": c.get("polarity"),
+            "exceptions": c.get("exceptions") or [],
+            "chunk_id": c.get("chunk_id"),
             "verified": c.get("verified", False),
-        }
-        for c in verified_claims
-    ]
+        })
+    return out
 
 
 async def _cache_lookup(db, document_id, version_hash, norm_q) -> AnswerResult | None:
@@ -157,9 +177,12 @@ async def answer_question(
         answerable = bool(data.get("answerable", False))
         # TODO: one independent Flash critic pass before clearing high-stakes answers.
 
+    # Map each retrieved chunk to its real page so citations carry a page number even when
+    # the model omits the optional `page` field.
+    chunk_pages = {str(c.chunk_id): c.page_start for c in retrieval.chunks}
     result = AnswerResult(
         answer=data.get("answer", ""),
-        citations=_build_citations(verification["verified_claims"]),
+        citations=_build_citations(verification["verified_claims"], chunk_pages),
         exceptions=[e for c in verification["verified_claims"] for e in (c.get("exceptions") or [])],
         answerable=answerable,
         missing_context=data.get("missing_context", []),

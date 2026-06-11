@@ -12,7 +12,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.conversation import Conversation, Message
 from app.models.user import User
-from app.services.gemini_files.engine import answer_question
+from app.services.answer_router import answer_question
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
@@ -40,12 +40,20 @@ async def ask(
     await db.commit()
 
     # Run the escalation ladder (cache -> retrieve -> generate -> gates -> escalate).
-    result = await answer_question(
-        db=db,
-        document_id=convo.document_id,
-        question=body.question,
-        tier_override=body.tier,
-    )
+    try:
+        result = await answer_question(
+            db=db,
+            document_id=convo.document_id,
+            question=body.question,
+            tier_override=body.tier,
+        )
+    except Exception as e:
+        error_str = str(e)
+        if "429 RESOURCE_EXHAUSTED" in error_str:
+            raise HTTPException(status_code=429, detail="API rate limit exceeded. Please wait a minute and try again.")
+        if "503" in error_str or "UNAVAILABLE" in error_str:
+            raise HTTPException(status_code=503, detail="The AI model is temporarily busy (high demand). Please try again in a moment.")
+        raise HTTPException(status_code=500, detail=f"Failed to generate answer: {error_str}")
 
     msg = Message(
         conversation_id=conversation_id,
@@ -73,4 +81,5 @@ async def ask(
         "answerable": result.answerable,
         "confidence": result.confidence,
         "escalated": result.escalated,
+        "token_usage": result.token_usage,
     }

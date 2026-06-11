@@ -22,6 +22,12 @@ class UploadedFile:
 
 
 @dataclass
+class CachedContext:
+    name: str                   # "cachedContents/abc123"
+    expires_at: object | None   # tz-aware datetime from the SDK, or None
+
+
+@dataclass
 class GenResult:
     data: dict
     model: str
@@ -65,29 +71,104 @@ class GeminiFilesClient:
             expires_at=getattr(f, "expiration_time", None),
         )
 
+    # ── preflight ─────────────────────────────────────────────────────────
+    async def count_tokens(self, file_name: str, *, model: str) -> int:
+        """Token count for the file alone. Raises ClientError(400) if Gemini cannot process
+        the document at all (too large) — the signal we use to route to the RAG fallback."""
+        return await asyncio.to_thread(self._count_tokens_sync, file_name, model)
+
+    def _count_tokens_sync(self, file_name: str, model: str) -> int:
+        from google import genai
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        file_obj = client.files.get(name=file_name)
+        resp = client.models.count_tokens(model=model, contents=[file_obj])
+        return getattr(resp, "total_tokens", 0) or 0
+
+    # ── context cache ─────────────────────────────────────────────────────
+    async def create_cache(self, file_name: str, *, model: str, system_prompt: str,
+                           ttl_seconds: int) -> CachedContext:
+        """Create an explicit context cache holding the document + system prompt, so repeat
+        questions skip re-processing the whole file. Raises ClientError(400) if the document is
+        below the model's cache-size minimum — caller then just skips caching."""
+        return await asyncio.to_thread(
+            self._create_cache_sync, file_name, model, system_prompt, ttl_seconds
+        )
+
+    def _create_cache_sync(self, file_name: str, model: str, system_prompt: str,
+                           ttl_seconds: int) -> CachedContext:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        file_obj = client.files.get(name=file_name)
+        cache = client.caches.create(
+            model=model,
+            config=types.CreateCachedContentConfig(
+                contents=[file_obj],
+                system_instruction=system_prompt,
+                ttl=f"{ttl_seconds}s",
+            ),
+        )
+        return CachedContext(name=cache.name, expires_at=getattr(cache, "expire_time", None))
+
     # ── grounded answer ───────────────────────────────────────────────────
     async def answer(self, file_name: str, question: str, *, model: str,
-                     system_prompt: str, schema: dict, max_output_tokens: int) -> GenResult:
+                     system_prompt: str, schema: dict, max_output_tokens: int,
+                     cached_content: str | None = None) -> GenResult:
         return await asyncio.to_thread(
-            self._answer_sync, file_name, question, model, system_prompt, schema, max_output_tokens
+            self._answer_sync, file_name, question, model, system_prompt, schema,
+            max_output_tokens, cached_content,
         )
 
     def _answer_sync(self, file_name: str, question: str, model: str, system_prompt: str,
-                     schema: dict, max_output_tokens: int) -> GenResult:
+                     schema: dict, max_output_tokens: int,
+                     cached_content: str | None = None) -> GenResult:
+        from google import genai
         from google.genai import types
+        import copy
 
-        client = self._ensure_client()
-        file_obj = client.files.get(name=file_name)   # reconstruct the File handle
+        from app.services.gemini.retry import call_with_model_fallback, fallback_chain, with_retry
 
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            response_mime_type="application/json",
-            response_schema=schema,
-            max_output_tokens=max_output_tokens,
-        )
-        resp = client.models.generate_content(
-            model=model, contents=[file_obj, f"QUESTION: {question}"], config=config
-        )
+        # Create a fresh genai.Client per call. The singleton httpx connection
+        # pool inside genai.Client does not survive reuse across asyncio.to_thread
+        # invocations in the uvicorn worker, causing 400 INVALID_ARGUMENT errors.
+        client = genai.Client(api_key=settings.gemini_api_key)
+        # Deep-copy the schema because the google-genai SDK mutates the dict
+        # in-place (e.g. "object" → "OBJECT"), corrupting the module constant.
+        schema_copy = copy.deepcopy(schema)
+
+        if cached_content:
+            # Cached path: the file + system prompt live in the cache, so neither may be set on
+            # the request. The cache is bound to `model`, so no cross-model fallback here — the
+            # engine retries the uncached path if the cache is stale/invalid.
+            config = types.GenerateContentConfig(
+                cached_content=cached_content,
+                response_mime_type="application/json",
+                response_schema=schema_copy,
+                max_output_tokens=max_output_tokens,
+            )
+            resp = with_retry(
+                lambda: client.models.generate_content(
+                    model=model, contents=[f"QUESTION: {question}"], config=config
+                ),
+                what="files.generate_content(cached)",
+            )
+        else:
+            file_obj = client.files.get(name=file_name)   # reconstruct the File handle
+            config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                response_mime_type="application/json",
+                response_schema=schema_copy,
+                max_output_tokens=max_output_tokens,
+            )
+            resp = call_with_model_fallback(
+                lambda m: client.models.generate_content(
+                    model=m, contents=[file_obj, f"QUESTION: {question}"], config=config
+                ),
+                fallback_chain(model),
+                what="files.generate_content",
+            )
 
         try:
             data = json.loads(resp.text)

@@ -13,8 +13,12 @@ class Settings(BaseSettings):
 
     # Gemini (legacy RAG engine — unused on the NotebookLM branch, kept for fallback)
     gemini_api_key: str = ""
-    gemini_model_fast: str = "gemini-flash-latest"
-    gemini_model_accurate: str = "gemini-pro-latest"
+    gemini_model_fast: str = "gemini-2.5-flash"
+    gemini_model_accurate: str = "gemini-2.5-pro"
+    # Weakest tier — used ONLY as a last-resort fallback when stronger models are sustained-503.
+    gemini_model_lite: str = "gemini-2.5-flash-lite"
+    # Stable fallback used when the primary model returns a sustained 503 ("high demand").
+    gemini_model_fallback: str = "gemini-2.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 768
 
@@ -35,7 +39,7 @@ class Settings(BaseSettings):
 
     # Cost guardrails
     max_context_tokens: int = 12_000
-    max_output_tokens: int = 1_500
+    max_output_tokens: int = 8_192
     daily_spend_limit_usd: float = 50.0
     per_user_daily_token_limit: int = 2_000_000
 

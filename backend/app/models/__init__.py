@@ -12,6 +12,7 @@ from app.models.document import (
 )
 from app.models.usage import Usage
 from app.models.user import User
+from app.models.report import RiskReport
 
 __all__ = [
     "Base",
@@ -26,4 +27,5 @@ __all__ = [
     "Message",
     "AnswerCache",
     "Usage",
+    "RiskReport",
 ]

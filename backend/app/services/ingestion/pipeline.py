@@ -21,6 +21,7 @@ from app.models.document import (
 from app.services.gemini.client import get_gemini
 from app.services.ingestion.chunk import chunk_document
 from app.services.ingestion.parse import parse_document
+from app.services.ingestion.parse_light import parse_pdf_text
 from app.services.ingestion.structure import extract_structures
 
 # Small docs (below this token count) can be cached whole (lazy, short TTL); larger -> RAG.
@@ -66,6 +67,30 @@ async def ingest_document(db: AsyncSession, document_id: uuid.UUID) -> None:
         doc.error_msg = str(exc)
         await db.commit()
         raise
+
+
+async def run_rag_ingestion(db: AsyncSession, doc: Document) -> None:
+    """RAG fallback ingestion for documents too large for whole-file Gemini attachment.
+
+    Uses the lightweight pypdf text extractor (no Docling/OCR), then the same
+    chunk → structure → embed → persist path as the full pipeline. The caller owns
+    document status and the strategy flag; this only populates chunks/embeddings/structures.
+    """
+    parsed = parse_pdf_text(doc.storage_uri)
+    doc.page_count = parsed.page_count
+
+    chunks = chunk_document(parsed)
+    if not chunks:
+        raise ValueError(
+            "no extractable text — the document appears to be scanned without an OCR text layer"
+        )
+
+    structures = extract_structures(chunks)
+    vectors = await get_gemini().embed([c.content for c in chunks], batch=True)
+    if len(vectors) != len(chunks):
+        raise ValueError(f"embedding count {len(vectors)} != chunk count {len(chunks)}")
+
+    await _persist(db, doc, chunks, structures, vectors)
 
 
 async def _persist(db, doc, chunks, structures, vectors) -> None:
